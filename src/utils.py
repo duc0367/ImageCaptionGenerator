@@ -2,6 +2,7 @@ import os
 import string
 import cv2
 import numpy as np
+import torch
 
 BASE_PATH = '../data/'
 VOCAB_THRESHOLD = 2
@@ -36,7 +37,7 @@ def load_description():
         line = line.split('\t')
         id_with_index = line[0].split('#')
         image_id = id_with_index[0]
-        image_id = image_id[0: len(image_id)-4]
+        image_id = image_id[0: len(image_id) - 4]
         description = preprocessing_text(line[1])
         description = add_start_stop_word(description)
         if image_id not in descriptions:
@@ -113,7 +114,9 @@ def build_dataset(encoded_images, descriptions: dict, word_to_idx: dict, max_len
                 x2.append(encoded_images[img_id])
                 padding_length = max(0, max_len - len(words[:idx]))
                 x1.append(np.pad(words[:idx], (0, padding_length), 'constant', constant_values=(0,)))
-                y.append(words[idx])
+                label = np.zeros((max_len, ))
+                label[words[idx]] = 1  # one hot encoding
+                y.append(label)
     x1 = batch_size(x1, batch_size)
     x2 = batch_size(x2, batch_size)
     y = batch_size(y, batch_size)
@@ -123,9 +126,9 @@ def build_dataset(encoded_images, descriptions: dict, word_to_idx: dict, max_len
 def get_max_length_description(descriptions: dict):
     descriptions_arr = list(descriptions.values())
     descriptions_flatten = [
-            x
-            for xs in descriptions_arr
-            for x in xs
+        x
+        for xs in descriptions_arr
+        for x in xs
     ]
     descriptions_length = [len(description.split()) for description in descriptions_flatten]
     return np.max(descriptions_length)
@@ -152,3 +155,27 @@ def build_embedding_matrix(word_to_id: dict):
         if embedding_word is not None:
             embedding_matrix[idx] = embedding_word
     return embedding_matrix
+
+
+def generate_caption(model, image: torch.Tensor, max_length: int, word_to_idx: dict, idx_to_word: dict):
+    model.eval()
+    x1 = image.unsqueeze(dim=0)
+    x2 = torch.zeros((1, max_length), dtype=torch.float32)
+    newest_word = word_to_idx['startseq']
+    prediction = ''
+    for i in range(max_length):
+        x2[0, i] = newest_word
+        next_word_id = torch.argmax(model(x1, x2))
+        next_word = idx_to_word[next_word_id]
+        prediction += next_word
+        if next_word == 'endseq':
+            break
+        newest_word = next_word_id
+
+    words = prediction.split()
+    if newest_word == word_to_idx['endseq']:
+        words = words[1: len(words) - 1]
+    else:
+        words = words[1:]
+
+    return ''.join(words)
